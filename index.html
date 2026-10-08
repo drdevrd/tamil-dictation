@@ -43,10 +43,10 @@
   <div class="card">
     <label>Automatic output after you stop speaking</label>
     <select id="mode">
-      <option value="both">Tamil (corrected) + English translation</option>
-      <option value="ta">Tamil (corrected) only</option>
-      <option value="en">English translation only</option>
-      <option value="raw">Raw transcript only (no cleanup)</option>
+      <option value="both">Exact transcript + light AI correction + English</option>
+      <option value="ta">Exact transcript + light AI correction</option>
+      <option value="en">Exact transcript + English</option>
+      <option value="raw">Exact transcript only (no AI at all)</option>
     </select>
     <div style="height:10px"></div>
     <button id="rec">● Start Recording</button>
@@ -59,17 +59,21 @@
   </div>
 
   <div class="card">
-    <label id="l_ta">Tamil</label>
-    <textarea id="out" placeholder="தமிழ் எழுத்தாக்கம் இங்கே தானாகத் தோன்றும்..."></textarea>
+    <label id="l_ta">Exact transcription (what the speech model heard, never changed by AI)</label>
+    <textarea id="out" placeholder="சரியான எழுத்தாக்கம் இங்கே முதலில் தோன்றும்..."></textarea>
+    <div id="corbox">
+      <label style="margin-top:12px">AI-corrected Tamil (light spelling/punctuation fixes only, compare with the exact text above)</label>
+      <textarea id="cor" placeholder="Light AI correction appears here after the exact transcription..."></textarea>
+    </div>
     <div id="enbox">
-      <label style="margin-top:12px">English</label>
+      <label style="margin-top:12px">English (translated from the exact transcription)</label>
       <textarea id="en" placeholder="English translation appears here automatically..."></textarea>
     </div>
     <div class="row" style="margin-top:12px">
       <button id="rpnow">↻ Rephrase edited text</button>
-      <button id="retr">↻ Re-translate edited Tamil</button>
+      <button id="retr">↻ Re-run correction + translation from exact text</button>
     </div>
-    <div class="hint">After editing, press a button. "Rephrase" uses the English box (or Tamil if English is empty). "Re-translate" uses the Tamil box, then rephrases.</div>
+    <div class="hint">After editing, press a button. "Rephrase" uses the English box (then the corrected Tamil, then the exact text). "Re-run" redoes the AI correction and English from the exact transcription box.</div>
     <div class="row" style="margin-top:10px">
       <button class="sec" id="copy">Copy all</button>
       <button class="sec" id="dltxt">Download .txt</button>
@@ -167,21 +171,22 @@ $('mode').onchange = ()=>{ saveSettings(true); applyMode(); };
 function applyMode(){
   const m = $('mode').value;
   $('enbox').style.display = (m==='both'||m==='en') ? '' : 'none';
-  $('l_ta').textContent = m==='en' ? 'Tamil (raw transcript)' : (m==='raw' ? 'Tamil (raw transcript)' : 'Tamil');
+  $('corbox').style.display = (m==='both'||m==='ta') ? '' : 'none';
 }
 loadSettings(); applyMode();
 function setStatus(t,c){ const el=$('status'); el.textContent=t; el.className=c||''; }
 
 // ---------- display
 function render(){
-  $('out').value = S.items.map(i=>i.ta||i.raw||'').filter(Boolean).join(' ');
+  $('out').value = S.items.map(i=>i.raw||'').filter(Boolean).join(' ');
+  $('cor').value = S.items.map(i=>i.ta||'').filter(Boolean).join(' ');
   $('en').value  = S.items.map(i=>i.en||'').filter(Boolean).join(' ');
-  $('out').scrollTop = $('out').scrollHeight; $('en').scrollTop = $('en').scrollHeight;
+  for (const id of ['out','cor','en']) $(id).scrollTop = $(id).scrollHeight;
 }
-function lockBoxes(){ const ro = S.recording || S.pending>0; $('out').readOnly = ro; $('en').readOnly = ro; }
+function lockBoxes(){ const ro = S.recording || S.pending>0; $('out').readOnly = ro; $('cor').readOnly = ro; $('en').readOnly = ro; }
 // manual edits replace the item list with one edited item
-function onEdit(){ S.items = [{raw:'', ta:$('out').value, en:$('en').value}]; }
-$('out').addEventListener('input', onEdit); $('en').addEventListener('input', onEdit);
+function onEdit(){ S.items = [{raw:$('out').value, ta:$('cor').value, en:$('en').value}]; }
+for (const id of ['out','cor','en']) $(id).addEventListener('input', onEdit);
 
 // ---------- recording (auto-chunked)
 function pickMime(){
@@ -237,12 +242,12 @@ function enqueue(blob, name){
     const raw = (await transcribe(blob,name)).trim();
     if (!raw) return;
     const item = {raw, ta:'', en:''};
-    S.items.push(item); render();           // raw text shows immediately
+    S.items.push(item); render();           // exact transcription shows first, untouched
     const mode = $('mode').value;
-    if (mode==='raw'){ item.ta = raw; render(); return; }
+    if (mode==='raw') return;
     setStatus(mode==='ta' ? 'Correcting…' : 'Translating…','');
     try{ await process(item, mode); }
-    catch(e){ item.ta = raw; S.lastErr = true; setStatus('Cleanup/translation error: '+e.message+' (raw text kept)','err'); }
+    catch(e){ S.lastErr = true; setStatus('Correction/translation error: '+e.message+' (exact transcription kept)','err'); }
     render();
   }).catch(e=>{
     S.lastErr = true; setStatus('Transcription error: '+e.message,'err');
@@ -263,7 +268,7 @@ async function transcribe(blob, nameHint){
   fd.append('model', $('stt_custom').value.trim() || $('stt').value);
   fd.append('language', 'ta');
   fd.append('response_format', 'json');
-  const tail = S.items.length ? (S.items[S.items.length-1].ta || S.items[S.items.length-1].raw || '').slice(-200) : '';
+  const tail = S.items.length ? (S.items[S.items.length-1].raw || '').slice(-200) : '';
   const prompt = (($('gloss').value ? 'Terms: '+$('gloss').value+'. ' : '') + tail).slice(-800);
   if (prompt) fd.append('prompt', prompt);
   const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {method:'POST', headers:{Authorization:'Bearer '+key}, body:fd});
@@ -278,16 +283,17 @@ async function process(item, mode){
   if (!key) throw new Error(engine==='claude' ? 'Anthropic key missing' : 'OpenAI key missing');
   const gloss = $('gloss').value.trim();
   const task = {
-    ta:   'Output only the corrected Tamil text.',
-    both: 'Output the corrected Tamil text, then a new line containing exactly '+SEP+' and then a faithful English translation. Nothing else.',
-    en:   'Output only a faithful English translation.'
+    ta:   'Output only the lightly corrected Tamil text.',
+    both: 'Output the lightly corrected Tamil text, then a new line containing exactly '+SEP+' and then a faithful, literal English translation of the EXACT transcript (translate the original words, not your corrections). Nothing else.',
+    en:   'Output only a faithful, literal English translation of the exact transcript.'
   }[mode];
-  const system = 'You are a careful transcript editor for a physician in Coimbatore, India. The input is a raw speech-to-text transcript of Tamil dictation, often mixing English medical terms (Tanglish). '
-    + 'Fix misheard words, spelling, sandhi, punctuation and sentence breaks. Keep the speaker\'s meaning and wording; do not add, remove or summarise content. '
-    + 'Keep English medical terms, drug names, doses and numbers in English/Latin script exactly as spoken. '
+  const system = 'You are a conservative proofreader for Tamil dictation by a physician in Coimbatore, India. The input is an exact speech-to-text transcript, often mixing English medical terms (Tanglish). '
+    + 'Any correction must change as little as possible: fix only obvious spelling, spacing and punctuation. '
+    + 'NEVER replace a word with a different word, never rephrase, never fix grammar or style, never add or remove content, and never change numbers, doses, drug names, or negations (yes/no, not, without). '
+    + 'Translations must be literal and faithful to what was actually said, even if the sentence sounds odd; do not smooth it or guess a more sensible meaning. '
     + (gloss ? 'Known terms and names: '+gloss+'. ' : '')
-    + 'If a word is unclear, keep it as is and mark it with [?]. '+task+' No preamble, no commentary.';
-  const prev = S.items.length>1 ? (S.items[S.items.length-2].ta||'').slice(-300) : '';
+    + 'If anything is unclear, keep it exactly as is and mark it with [?]. '+task+' No preamble, no commentary.';
+  const prev = S.items.length>1 ? (S.items[S.items.length-2].raw||'').slice(-300) : '';
   const user = (prev ? 'Earlier text for context only (do not repeat or translate it):\n'+prev+'\n\n' : '') + 'Transcript to process:\n' + item.raw;
   let out = '';
   if (engine==='claude'){
@@ -314,7 +320,7 @@ async function process(item, mode){
     const i = out.indexOf(SEP);
     if (i>=0){ item.ta = out.slice(0,i).trim(); item.en = out.slice(i+SEP.length).trim(); }
     else { item.ta = out; }
-  } else if (mode==='en'){ item.ta = item.raw; item.en = out; }
+  } else if (mode==='en'){ item.en = out; }
   else { item.ta = out; }
 }
 
@@ -356,7 +362,7 @@ const asText = v => Array.isArray(v) ? v.join('\n') : (v==null ? '' : String(v))
 
 async function autoRephrase(force){
   if (force !== true && $('autorp').value !== 'on') return;
-  const text = $('en').value.trim() || $('out').value.trim();
+  const text = $('en').value.trim() || $('cor').value.trim() || $('out').value.trim();
   if (!text) return;
   const my = ++rpToken;
   $('rpstat').textContent = '(working…)';
@@ -390,11 +396,11 @@ async function autoRephrase(force){
 $('rpnow').onclick = ()=>{ clearTimeout(rpTimer); autoRephrase(true); };
 $('retr').onclick = async ()=>{
   const raw = $('out').value.trim();
-  if (!raw){ setStatus('Tamil box is empty','err'); return; }
+  if (!raw){ setStatus('Exact transcription box is empty','err'); return; }
   const mode = $('mode').value;
   const btn = $('retr'); btn.disabled = true;
   try{
-    if (mode === 'raw'){ S.items = [{raw, ta:raw, en:''}]; }
+    if (mode === 'raw'){ S.items = [{raw, ta:'', en:''}]; }
     else {
       setStatus(mode==='ta' ? 'Correcting…' : 'Translating…','');
       const item = {raw, ta:'', en:''};
@@ -430,10 +436,12 @@ $('file2').onchange = $('file').onchange;
 
 // ---------- export
 function fullText(){
-  const ta = $('out').value.trim(), en = $('en').value.trim();
-  const m = $('mode').value;
-  if ((m==='both'||m==='en') && en) return (m==='en' ? '' : ta+'\n\n') + 'English:\n' + en;
-  return ta;
+  const raw = $('out').value.trim(), ta = $('cor').value.trim(), en = $('en').value.trim();
+  const parts = [];
+  if (raw) parts.push('Exact transcription:\n' + raw);
+  if (ta) parts.push('AI-corrected Tamil:\n' + ta);
+  if (en) parts.push('English:\n' + en);
+  return parts.join('\n\n');
 }
 function stamp(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'_'+String(d.getHours()).padStart(2,'0')+String(d.getMinutes()).padStart(2,'0'); }
 function dl(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),2000); }
