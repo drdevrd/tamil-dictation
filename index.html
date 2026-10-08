@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tamil Dictation</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#6b7280;--acc:#0b6bcb;--rec:#d92d20;--ok:#067647;--bd:#e3e6ea}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'Noto Sans Tamil',system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:16px}
+  h1{font-size:20px;margin:6px 0 14px}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:14px}
+  label{display:block;font-size:12px;color:var(--mute);margin:8px 0 3px}
+  input,select,textarea{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px;font:inherit;background:#fff;color:var(--ink)}
+  textarea{min-height:170px;font-size:17px;line-height:1.7;resize:vertical}
+  textarea[readonly]{background:#f3f5f8}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>*{flex:1;min-width:140px}
+  button{padding:10px 14px;border:0;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;background:var(--acc);color:#fff}
+  button.sec{background:#eef1f5;color:var(--ink)}
+  #rec{width:100%;padding:18px;font-size:18px;background:var(--rec)}
+  #rec.on{background:#111}
+  .timer{font-variant-numeric:tabular-nums;text-align:center;font-size:26px;margin:8px 0}
+  #status{font-size:13px;color:var(--mute);min-height:18px;text-align:center}
+  #status.err{color:var(--rec)} #status.ok{color:var(--ok)}
+  details summary{cursor:pointer;font-weight:600}
+  .hint{font-size:12px;color:var(--mute);margin-top:4px}
+  .rp{margin-top:12px}
+  .rpl{font-weight:600;font-size:14px;margin-bottom:4px}
+  .rpr{display:flex;gap:10px;align-items:flex-start}
+  .rpt{flex:1;white-space:pre-wrap;border:1px solid var(--bd);border-radius:8px;padding:9px;min-height:42px;font-size:16px;line-height:1.6;background:#fff}
+  .rpexp{font-size:13px;color:#8a4b00;background:#fff7ec;border:1px solid #f3dcc0;border-radius:8px;padding:7px 9px;margin-bottom:6px;white-space:pre-wrap}
+  .rpexp:empty{display:none}
+  .cp{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ Tamil Dictation → Text</h1>
+
+  <div class="card">
+    <label>Automatic output after you stop speaking</label>
+    <select id="mode">
+      <option value="both">Tamil (corrected) + English translation</option>
+      <option value="ta">Tamil (corrected) only</option>
+      <option value="en">English translation only</option>
+      <option value="raw">Raw transcript only (no cleanup)</option>
+    </select>
+    <div style="height:10px"></div>
+    <button id="rec">● Start Recording</button>
+    <div class="timer" id="timer">00:00</div>
+    <div id="status"></div>
+    <div class="row" style="margin-top:10px">
+      <div><label>Phone recorder (works without https)</label><input type="file" id="file2" accept="audio/*" capture></div>
+      <div><label>Or upload an audio file</label><input type="file" id="file" accept="audio/*,video/*"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label id="l_ta">Tamil</label>
+    <textarea id="out" placeholder="தமிழ் எழுத்தாக்கம் இங்கே தானாகத் தோன்றும்..."></textarea>
+    <div id="enbox">
+      <label style="margin-top:12px">English</label>
+      <textarea id="en" placeholder="English translation appears here automatically..."></textarea>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="rpnow">↻ Rephrase edited text</button>
+      <button id="retr">↻ Re-translate edited Tamil</button>
+    </div>
+    <div class="hint">After editing, press a button. "Rephrase" uses the English box (or Tamil if English is empty). "Re-translate" uses the Tamil box, then rephrases.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="sec" id="copy">Copy all</button>
+      <button class="sec" id="dltxt">Download .txt</button>
+      <button class="sec" id="dldoc">Download .doc (Word)</button>
+      <button class="sec" id="clear">Clear</button>
+    </div>
+  </div>
+
+  <div class="card" id="rpcard">
+    <div style="font-weight:600">Rephrase options <span id="rpstat" class="hint"></span></div>
+    <div class="hint">Appears automatically after translation (English if available, otherwise Tamil).</div>
+
+    <div class="rp"><div class="rpl">1. Natural tone</div>
+      <div class="rpr"><div class="rpt" id="rp_natural"></div><button class="sec cp" data-src="rp_natural">Copy</button></div></div>
+
+    <div class="rp"><div class="rpl">2. Rephrase</div>
+      <div class="rpr"><div class="rpt" id="rp_rephrase"></div><button class="sec cp" data-src="rp_rephrase">Copy</button></div></div>
+
+    <div class="rp"><div class="rpl">3. Grammar mistake</div>
+      <div class="rpexp" id="rp_gexp"></div>
+      <div class="rpr"><div class="rpt" id="rp_grammar"></div><button class="sec cp" data-src="rp_grammar">Copy</button></div></div>
+
+    <div class="rp"><div class="rpl">4. Casual</div>
+      <div class="rpr"><div class="rpt" id="rp_casual"></div><button class="sec cp" data-src="rp_casual">Copy</button></div></div>
+
+    <div class="rp"><div class="rpl">5. Professional</div>
+      <div class="rpr"><div class="rpt" id="rp_professional"></div><button class="sec cp" data-src="rp_professional">Copy</button></div></div>
+  </div>
+
+  <div class="card">
+    <details open>
+      <summary>Settings</summary>
+      <label>OpenAI API key (speech-to-text)</label>
+      <input type="password" id="k_oa" placeholder="sk-...">
+      <label>Transcription model</label>
+      <select id="stt">
+        <option value="gpt-4o-transcribe">gpt-4o-transcribe (GPT-4o, best accuracy)</option>
+        <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe (faster, cheaper)</option>
+        <option value="whisper-1">whisper-1</option>
+      </select>
+      <label>Custom transcription model (optional, overrides the list above)</label>
+      <input id="stt_custom" placeholder="e.g. a newer model name from OpenAI">
+      <label>Cleanup / translation engine</label>
+      <select id="engine">
+        <option value="openai">OpenAI GPT (uses the OpenAI key above)</option>
+        <option value="claude">Claude (needs Anthropic key)</option>
+      </select>
+      <label>OpenAI model for cleanup / translation</label>
+      <input id="om" value="gpt-4o">
+      <label>Anthropic API key (only if engine is Claude)</label>
+      <input type="password" id="k_an" placeholder="sk-ant-...">
+      <label>Claude model</label>
+      <input id="cm" value="claude-sonnet-5-5">
+      <label>Glossary: drug names, medical terms, names (comma separated). Helps both steps.</label>
+      <textarea id="gloss" style="min-height:70px;font-size:14px" placeholder="paracetamol, ibuprofen, bronchiolitis, nebulisation, PICU, ..."></textarea>
+      <label>Auto-rephrase after translation</label>
+      <select id="autorp"><option value="on">On</option><option value="off">Off</option></select>
+      <label>Tone 1: Natural (instruction)</label>
+      <textarea id="t_natural" style="min-height:56px;font-size:14px">Rewrite so it sounds like natural, fluent everyday speech from a native speaker, keeping the same meaning.</textarea>
+      <label>Tone 2: Rephrase (instruction)</label>
+      <textarea id="t_rephrase" style="min-height:56px;font-size:14px">Rephrase using different wording and sentence structure, keeping the same meaning and overall tone.</textarea>
+      <label>Tone 3: Grammar (instruction)</label>
+      <textarea id="t_grammar" style="min-height:56px;font-size:14px">Find the grammar mistakes in the text. Explain briefly what each mistake is, then give the corrected sentence only.</textarea>
+      <label>Tone 4: Casual (instruction)</label>
+      <textarea id="t_casual" style="min-height:56px;font-size:14px">Rewrite in a casual, friendly, relaxed tone, as if talking to a friend or colleague.</textarea>
+      <label>Tone 5: Professional (instruction)</label>
+      <textarea id="t_professional" style="min-height:56px;font-size:14px">Rewrite in a professional, polite, clear tone suitable for workplace or clinical communication.</textarea>
+      <label>Auto-split recording every (seconds)</label>
+      <input type="number" id="chunk" value="60" min="20" max="240">
+      <div class="hint">Keys are stored only in this browser (localStorage) and sent only to OpenAI / Anthropic.</div>
+      <div style="margin-top:10px"><button class="sec" id="save">Save settings</button></div>
+    </details>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const S = {stream:null, rec:null, recording:false, segTimer:null, tick:null, t0:0, queue:Promise.resolve(), pending:0, items:[], lastErr:false};
+const SEP = '###EN###';
+
+// ---------- settings
+function loadSettings(){
+  try{
+    const s = JSON.parse(localStorage.getItem('tdict')||'{}');
+    for (const [k,id] of [['oa','k_oa'],['an','k_an'],['stt','stt'],['sttc','stt_custom'],['eng','engine'],['om','om'],['cm','cm'],['gloss','gloss'],['chunk','chunk'],['mode','mode'],['autorp','autorp'],['tn','t_natural'],['tr','t_rephrase'],['tg','t_grammar'],['tc','t_casual'],['tp','t_professional']])
+      if (s[k]!==undefined) $(id).value = s[k];
+  }catch(e){}
+}
+function saveSettings(quiet){
+  const s = {oa:$('k_oa').value.trim(), an:$('k_an').value.trim(), stt:$('stt').value, sttc:$('stt_custom').value.trim(), eng:$('engine').value, om:$('om').value.trim(), cm:$('cm').value.trim(), gloss:$('gloss').value, chunk:$('chunk').value, mode:$('mode').value, autorp:$('autorp').value, tn:$('t_natural').value, tr:$('t_rephrase').value, tg:$('t_grammar').value, tc:$('t_casual').value, tp:$('t_professional').value};
+  try{ localStorage.setItem('tdict', JSON.stringify(s)); if(!quiet) setStatus('Settings saved','ok'); }catch(e){ if(!quiet) setStatus('Could not save settings','err'); }
+}
+$('save').onclick = ()=>saveSettings(false);
+$('mode').onchange = ()=>{ saveSettings(true); applyMode(); };
+function applyMode(){
+  const m = $('mode').value;
+  $('enbox').style.display = (m==='both'||m==='en') ? '' : 'none';
+  $('l_ta').textContent = m==='en' ? 'Tamil (raw transcript)' : (m==='raw' ? 'Tamil (raw transcript)' : 'Tamil');
+}
+loadSettings(); applyMode();
+function setStatus(t,c){ const el=$('status'); el.textContent=t; el.className=c||''; }
+
+// ---------- display
+function render(){
+  $('out').value = S.items.map(i=>i.ta||i.raw||'').filter(Boolean).join(' ');
+  $('en').value  = S.items.map(i=>i.en||'').filter(Boolean).join(' ');
+  $('out').scrollTop = $('out').scrollHeight; $('en').scrollTop = $('en').scrollHeight;
+}
+function lockBoxes(){ const ro = S.recording || S.pending>0; $('out').readOnly = ro; $('en').readOnly = ro; }
+// manual edits replace the item list with one edited item
+function onEdit(){ S.items = [{raw:'', ta:$('out').value, en:$('en').value}]; }
+$('out').addEventListener('input', onEdit); $('en').addEventListener('input', onEdit);
+
+// ---------- recording (auto-chunked)
+function pickMime(){
+  for (const m of ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'])
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+function startSegment(){
+  const mime = pickMime();
+  const rec = new MediaRecorder(S.stream, mime ? {mimeType:mime, audioBitsPerSecond:64000} : undefined);
+  const parts = [];
+  rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(parts, {type: rec.mimeType || mime || 'audio/webm'});
+    if (blob.size > 3000) enqueue(blob);
+    if (S.recording) startSegment();
+    else { if (S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream=null; } lockBoxes(); }
+  };
+  rec.start();
+  S.rec = rec;
+  const ms = Math.max(20, parseInt($('chunk').value)||60) * 1000;
+  S.segTimer = setTimeout(()=>{ if (S.rec && S.rec.state==='recording') S.rec.stop(); }, ms);
+}
+async function startRec(){
+  if (!$('k_oa').value.trim()){ setStatus('Enter OpenAI API key in Settings first','err'); return; }
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined'){
+    setStatus('Mic is blocked on this page because it is not https. Open the app from an https:// link, or use "Phone recorder" below.','err'); return;
+  }
+  try{
+    S.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
+  }catch(e){ setStatus('Microphone blocked: '+e.message,'err'); return; }
+  saveSettings(true);
+  S.recording = true; S.t0 = Date.now(); S.lastErr = false;
+  startSegment(); lockBoxes();
+  $('rec').textContent = '■ Stop'; $('rec').classList.add('on');
+  S.tick = setInterval(()=>{ const s=Math.floor((Date.now()-S.t0)/1000); $('timer').textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }, 500);
+  setStatus('Recording… speak in Tamil','');
+}
+function stopRec(){
+  S.recording = false;
+  clearTimeout(S.segTimer); clearInterval(S.tick);
+  if (S.rec && S.rec.state==='recording') S.rec.stop();
+  $('rec').textContent = '● Start Recording'; $('rec').classList.remove('on');
+  setStatus('Transcribing and translating…','');
+}
+$('rec').onclick = () => S.recording ? stopRec() : startRec();
+
+// ---------- pipeline: transcribe -> auto cleanup/translate (sequential, keeps order)
+function enqueue(blob, name){
+  S.pending++; lockBoxes();
+  S.queue = S.queue.then(async()=>{
+    setStatus('Transcribing…','');
+    const raw = (await transcribe(blob,name)).trim();
+    if (!raw) return;
+    const item = {raw, ta:'', en:''};
+    S.items.push(item); render();           // raw text shows immediately
+    const mode = $('mode').value;
+    if (mode==='raw'){ item.ta = raw; render(); return; }
+    setStatus(mode==='ta' ? 'Correcting…' : 'Translating…','');
+    try{ await process(item, mode); }
+    catch(e){ item.ta = raw; S.lastErr = true; setStatus('Cleanup/translation error: '+e.message+' (raw text kept)','err'); }
+    render();
+  }).catch(e=>{
+    S.lastErr = true; setStatus('Transcription error: '+e.message,'err');
+  }).finally(()=>{
+    S.pending--; lockBoxes();
+    if (!S.pending && !S.recording){ if (!S.lastErr) setStatus('Done ✔','ok'); autoRephrase(); }
+  });
+}
+
+async function transcribe(blob, nameHint){
+  const key = $('k_oa').value.trim();
+  if (!key) throw new Error('OpenAI key missing');
+  if (blob.size > 24*1024*1024) throw new Error('File over 24 MB. Use a shorter file.');
+  const t = blob.type || '';
+  const ext = nameHint ? nameHint.split('.').pop() : (t.includes('mp4')?'m4a':t.includes('ogg')?'ogg':t.includes('wav')?'wav':t.includes('mpeg')?'mp3':'webm');
+  const fd = new FormData();
+  fd.append('file', blob, 'audio.'+ext);
+  fd.append('model', $('stt_custom').value.trim() || $('stt').value);
+  fd.append('language', 'ta');
+  fd.append('response_format', 'json');
+  const tail = S.items.length ? (S.items[S.items.length-1].ta || S.items[S.items.length-1].raw || '').slice(-200) : '';
+  const prompt = (($('gloss').value ? 'Terms: '+$('gloss').value+'. ' : '') + tail).slice(-800);
+  if (prompt) fd.append('prompt', prompt);
+  const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {method:'POST', headers:{Authorization:'Bearer '+key}, body:fd});
+  if (!r.ok){ let m=r.status+''; try{ m=(await r.json()).error.message; }catch(e){} throw new Error(m); }
+  const j = await r.json();
+  return j.text || '';
+}
+
+async function process(item, mode){
+  const engine = $('engine').value;
+  const key = engine==='claude' ? $('k_an').value.trim() : $('k_oa').value.trim();
+  if (!key) throw new Error(engine==='claude' ? 'Anthropic key missing' : 'OpenAI key missing');
+  const gloss = $('gloss').value.trim();
+  const task = {
+    ta:   'Output only the corrected Tamil text.',
+    both: 'Output the corrected Tamil text, then a new line containing exactly '+SEP+' and then a faithful English translation. Nothing else.',
+    en:   'Output only a faithful English translation.'
+  }[mode];
+  const system = 'You are a careful transcript editor for a physician in Coimbatore, India. The input is a raw speech-to-text transcript of Tamil dictation, often mixing English medical terms (Tanglish). '
+    + 'Fix misheard words, spelling, sandhi, punctuation and sentence breaks. Keep the speaker\'s meaning and wording; do not add, remove or summarise content. '
+    + 'Keep English medical terms, drug names, doses and numbers in English/Latin script exactly as spoken. '
+    + (gloss ? 'Known terms and names: '+gloss+'. ' : '')
+    + 'If a word is unclear, keep it as is and mark it with [?]. '+task+' No preamble, no commentary.';
+  const prev = S.items.length>1 ? (S.items[S.items.length-2].ta||'').slice(-300) : '';
+  const user = (prev ? 'Earlier text for context only (do not repeat or translate it):\n'+prev+'\n\n' : '') + 'Transcript to process:\n' + item.raw;
+  let out = '';
+  if (engine==='claude'){
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+      body: JSON.stringify({model:$('cm').value.trim()||'claude-sonnet-5-5', max_tokens:4096, system, messages:[{role:'user',content:user}]})
+    });
+    if (!r.ok){ let m=r.status+''; try{ m=(await r.json()).error.message; }catch(e){} throw new Error(m); }
+    const j = await r.json();
+    out = (j.content||[]).map(b=>b.text||'').join('').trim();
+  } else {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+key,'content-type':'application/json'},
+      body: JSON.stringify({model:$('om').value.trim()||'gpt-4o', messages:[{role:'system',content:system},{role:'user',content:user}]})
+    });
+    if (!r.ok){ let m=r.status+''; try{ m=(await r.json()).error.message; }catch(e){} throw new Error(m); }
+    const j = await r.json();
+    out = ((j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||'').trim();
+  }
+  if (!out) throw new Error('empty response');
+  if (mode==='both'){
+    const i = out.indexOf(SEP);
+    if (i>=0){ item.ta = out.slice(0,i).trim(); item.en = out.slice(i+SEP.length).trim(); }
+    else { item.ta = out; }
+  } else if (mode==='en'){ item.ta = item.raw; item.en = out; }
+  else { item.ta = out; }
+}
+
+// ---------- rephrase options (automatic, after translation)
+let rpToken = 0, rpTimer = null;
+const RP_BOXES = ['rp_natural','rp_rephrase','rp_gexp','rp_grammar','rp_casual','rp_professional'];
+function clearRephrase(){ rpToken++; RP_BOXES.forEach(id=>$(id).textContent=''); $('rpstat').textContent=''; }
+
+async function callLLM(system, user){
+  const engine = $('engine').value;
+  const key = engine==='claude' ? $('k_an').value.trim() : $('k_oa').value.trim();
+  if (!key) throw new Error(engine==='claude' ? 'Anthropic key missing' : 'OpenAI key missing');
+  if (engine==='claude'){
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+      body: JSON.stringify({model:$('cm').value.trim()||'claude-sonnet-5-5', max_tokens:4096, system, messages:[{role:'user',content:user}]})
+    });
+    if (!r.ok){ let m=r.status+''; try{ m=(await r.json()).error.message; }catch(e){} throw new Error(m); }
+    const j = await r.json();
+    return (j.content||[]).map(b=>b.text||'').join('').trim();
+  }
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+key,'content-type':'application/json'},
+    body: JSON.stringify({model:$('om').value.trim()||'gpt-4o', messages:[{role:'system',content:system},{role:'user',content:user}]})
+  });
+  if (!r.ok){ let m=r.status+''; try{ m=(await r.json()).error.message; }catch(e){} throw new Error(m); }
+  const j = await r.json();
+  return ((j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||'').trim();
+}
+function parseJSON(s){
+  s = s.replace(/^```(?:json)?/i,'').replace(/```\s*$/,'').trim();
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a<0 || b<0) throw new Error('bad response');
+  return JSON.parse(s.slice(a,b+1));
+}
+const asText = v => Array.isArray(v) ? v.join('\n') : (v==null ? '' : String(v));
+
+async function autoRephrase(force){
+  if (force !== true && $('autorp').value !== 'on') return;
+  const text = $('en').value.trim() || $('out').value.trim();
+  if (!text) return;
+  const my = ++rpToken;
+  $('rpstat').textContent = '(working…)';
+  try{
+    const t = k => $('t_'+k).value.trim();
+    const gloss = $('gloss').value.trim();
+    const system = 'You rewrite text for a physician. Reply with ONE JSON object only (no markdown) with exactly these string keys: "natural", "rephrase", "grammar_explanation", "grammar_corrected", "casual", "professional". '
+      + 'Write every value in the same language as the input text. Keep the meaning, medical terms, drug names, doses and numbers unchanged. '
+      + (gloss ? 'Known terms and names: '+gloss+'. ' : '')
+      + 'Instructions per key. '
+      + 'natural: '+t('natural')+' '
+      + 'rephrase: '+t('rephrase')+' '
+      + 'grammar_explanation and grammar_corrected: '+t('grammar')+' (grammar_explanation holds only the short explanation of each mistake; grammar_corrected holds ONLY the corrected text with no explanation; if there are no mistakes, say so in grammar_explanation and return the original text unchanged in grammar_corrected). '
+      + 'casual: '+t('casual')+' '
+      + 'professional: '+t('professional');
+    const out = await callLLM(system, text);
+    if (my !== rpToken) return;
+    const j = parseJSON(out);
+    $('rp_natural').textContent = asText(j.natural);
+    $('rp_rephrase').textContent = asText(j.rephrase);
+    $('rp_gexp').textContent = asText(j.grammar_explanation);
+    $('rp_grammar').textContent = asText(j.grammar_corrected);
+    $('rp_casual').textContent = asText(j.casual);
+    $('rp_professional').textContent = asText(j.professional);
+    $('rpstat').textContent = '';
+  }catch(e){
+    if (my === rpToken) $('rpstat').textContent = '(error: '+e.message+')';
+  }
+}
+// buttons for after you edit the text by hand
+$('rpnow').onclick = ()=>{ clearTimeout(rpTimer); autoRephrase(true); };
+$('retr').onclick = async ()=>{
+  const raw = $('out').value.trim();
+  if (!raw){ setStatus('Tamil box is empty','err'); return; }
+  const mode = $('mode').value;
+  const btn = $('retr'); btn.disabled = true;
+  try{
+    if (mode === 'raw'){ S.items = [{raw, ta:raw, en:''}]; }
+    else {
+      setStatus(mode==='ta' ? 'Correcting…' : 'Translating…','');
+      const item = {raw, ta:'', en:''};
+      S.items = [item];
+      await process(item, mode);
+      setStatus('Done ✔','ok');
+    }
+    render();
+    autoRephrase(true);
+  }catch(e){ setStatus('Error: '+e.message,'err'); }
+  btn.disabled = false;
+};
+// copy buttons (grammar copies only the corrected sentence, not the explanation)
+document.querySelectorAll('.cp').forEach(b=>{
+  b.onclick = async ()=>{
+    const t = $(b.dataset.src).textContent;
+    try{ await navigator.clipboard.writeText(t); }
+    catch(e){ const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    const old = b.textContent; b.textContent = 'Copied ✔'; setTimeout(()=>b.textContent=old, 1200);
+  };
+});
+
+// upload file
+$('file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (!$('k_oa').value.trim()){ setStatus('Enter OpenAI API key in Settings first','err'); return; }
+  S.lastErr = false; saveSettings(true);
+  enqueue(f, f.name);
+  e.target.value = '';
+};
+
+$('file2').onchange = $('file').onchange;
+
+// ---------- export
+function fullText(){
+  const ta = $('out').value.trim(), en = $('en').value.trim();
+  const m = $('mode').value;
+  if ((m==='both'||m==='en') && en) return (m==='en' ? '' : ta+'\n\n') + 'English:\n' + en;
+  return ta;
+}
+function stamp(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'_'+String(d.getHours()).padStart(2,'0')+String(d.getMinutes()).padStart(2,'0'); }
+function dl(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),2000); }
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+$('copy').onclick = async()=>{ const t=fullText(); try{ await navigator.clipboard.writeText(t); setStatus('Copied','ok'); }catch(e){ const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); setStatus('Copied','ok'); } };
+$('dltxt').onclick = ()=> dl(new Blob(['\ufeff'+fullText()],{type:'text/plain;charset=utf-8'}),'dictation_'+stamp()+'.txt');
+$('dldoc').onclick = ()=>{
+  const paras = fullText().split(/\n+/).filter(Boolean).map(p=>'<p>'+esc(p)+'</p>').join('');
+  const html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>Dictation</title><style>body{font-family:"Nirmala UI","Latha",Calibri,sans-serif;font-size:14pt;line-height:1.6}</style></head><body>'+paras+'</body></html>';
+  dl(new Blob(['\ufeff',html],{type:'application/msword'}),'dictation_'+stamp()+'.doc');
+};
+$('clear').onclick = ()=>{ S.items=[]; render(); clearRephrase(); $('timer').textContent='00:00'; S.lastErr=false; setStatus('',''); };
+</script>
+</body>
+</html>
