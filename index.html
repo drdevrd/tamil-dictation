@@ -34,6 +34,11 @@
   .rpexp{font-size:13px;color:#8a4b00;background:#fff7ec;border:1px solid #f3dcc0;border-radius:8px;padding:7px 9px;margin-bottom:6px;white-space:pre-wrap}
   .rpexp:empty{display:none}
   .cp{white-space:nowrap}
+  .clip{border:1px solid var(--bd);border-radius:8px;padding:9px;margin-top:8px}
+  .clip .meta{font-size:13px;margin-bottom:6px}
+  .clip .meta.failed{color:var(--rec)} .clip .meta.done{color:var(--ok)}
+  .clip audio{width:100%;height:36px;margin-bottom:6px}
+  .clip .row button{padding:8px 10px;font-size:14px}
 </style>
 </head>
 <body>
@@ -70,16 +75,23 @@
       <textarea id="en" placeholder="English translation appears here automatically..."></textarea>
     </div>
     <div class="row" style="margin-top:12px">
-      <button id="rpnow">↻ Rephrase edited text</button>
-      <button id="retr">↻ Re-run correction + translation from exact text</button>
+      <button id="trnow">🌐 Translate to English</button>
+      <button id="cornow">✓ Light AI correction</button>
+      <button id="rpnow">↻ Rephrase</button>
     </div>
-    <div class="hint">After editing, press a button. "Rephrase" uses the English box (then the corrected Tamil, then the exact text). "Re-run" redoes the AI correction and English from the exact transcription box.</div>
+    <div class="hint">These buttons work in every mode, on whatever is in the Exact transcription box (you can edit it first). "Rephrase" uses English if present, otherwise the corrected or exact Tamil.</div>
     <div class="row" style="margin-top:10px">
       <button class="sec" id="copy">Copy all</button>
       <button class="sec" id="dltxt">Download .txt</button>
       <button class="sec" id="dldoc">Download .doc (Word)</button>
       <button class="sec" id="clear">Clear</button>
     </div>
+  </div>
+
+  <div class="card" id="clipcard" style="display:none">
+    <div style="font-weight:600">Saved recordings <span class="hint">(kept on this phone until you delete them, so you never have to dictate again)</span></div>
+    <div id="cliplist"></div>
+    <div style="margin-top:10px"><button class="sec" id="clipdelall">Delete all saved recordings</button></div>
   </div>
 
   <div class="card" id="rpcard">
@@ -151,7 +163,44 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const S = {stream:null, rec:null, recording:false, segTimer:null, tick:null, t0:0, queue:Promise.resolve(), pending:0, items:[], lastErr:false};
+const S = {stream:null, rec:null, recording:false, segTimer:null, tick:null, t0:0, queue:Promise.resolve(), pending:0, items:[], lastErr:false, clips:[], wake:null};
+
+// ---------- saved recordings (IndexedDB) so a failure never means dictating again
+let _db = null;
+function idb(){ return new Promise((res,rej)=>{ if(_db) return res(_db); try{ const r=indexedDB.open('tdict',1); r.onupgradeneeded=()=>r.result.createObjectStore('clips',{keyPath:'id'}); r.onsuccess=()=>{_db=r.result;res(_db);}; r.onerror=()=>rej(r.error); }catch(e){ rej(e); } }); }
+async function idbPut(c){ try{ const db=await idb(); db.transaction('clips','readwrite').objectStore('clips').put({id:c.id,ts:c.ts,blob:c.blob,name:c.name,status:c.status,err:c.err}); }catch(e){} }
+async function idbDel(id){ try{ const db=await idb(); db.transaction('clips','readwrite').objectStore('clips').delete(id); }catch(e){} }
+async function idbAll(){ try{ const db=await idb(); return await new Promise(res=>{ const r=db.transaction('clips').objectStore('clips').getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>res([]); }); }catch(e){ return []; } }
+function saveItems(){ try{ localStorage.setItem('tdict_items', JSON.stringify(S.items.map(i=>({id:i.id,ts:i.ts,raw:i.raw,ta:i.ta,en:i.en})))); }catch(e){} }
+function restoreItems(){ try{ const a=JSON.parse(localStorage.getItem('tdict_items')||'[]'); if(Array.isArray(a)) S.items=a; }catch(e){} }
+const clipTime = ts => new Date(ts).toLocaleString([], {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+function renderClips(){
+  const box = $('cliplist'); if(!box) return;
+  $('clipcard').style.display = S.clips.length ? '' : 'none';
+  box.innerHTML = '';
+  [...S.clips].sort((a,b)=>b.ts-a.ts).forEach(c=>{
+    const d = document.createElement('div'); d.className='clip';
+    const kb = Math.round((c.blob.size||0)/1024);
+    const st = c.status==='failed' ? 'FAILED: '+(c.err||'unknown error') : c.status==='done' ? 'Transcribed ✔' : c.status==='working' ? 'Working…' : 'Queued';
+    const meta = document.createElement('div'); meta.className='meta '+(c.status==='failed'?'failed':c.status==='done'?'done':''); meta.textContent = clipTime(c.ts)+' · '+kb+' KB · '+st;
+    d.appendChild(meta);
+    const au = document.createElement('audio'); au.controls = true; au.preload='none'; au.src = URL.createObjectURL(c.blob); d.appendChild(au);
+    const row = document.createElement('div'); row.className='row';
+    const mk = (t,fn,cls)=>{ const b=document.createElement('button'); b.textContent=t; b.className=cls||'sec'; b.onclick=fn; row.appendChild(b); };
+    mk(c.status==='done' ? '↻ Transcribe again' : '↻ Retry', ()=>{ if (c.status!=='working') { S.lastErr=false; runClip(c); } }, 'pri');
+    mk('⬇ Audio', ()=>dl(c.blob, 'recording_'+new Date(c.ts).toISOString().slice(0,16).replace(/[:T]/g,'-')+'.'+clipExt(c)));
+    mk('✕ Delete', ()=>{ if(confirm('Delete this saved recording?')){ S.clips=S.clips.filter(x=>x.id!==c.id); idbDel(c.id); renderClips(); } });
+    d.appendChild(row); box.appendChild(d);
+  });
+}
+function clipExt(c){ const t=(c.blob.type||''); return c.name ? c.name.split('.').pop() : (t.includes('mp4')?'m4a':t.includes('ogg')?'ogg':t.includes('wav')?'wav':t.includes('mpeg')?'mp3':'webm'); }
+async function loadClips(){
+  const all = (await idbAll()).sort((a,b)=>a.ts-b.ts);
+  all.forEach(c=>{ if (c.status==='working'||c.status==='queued'){ c.status='failed'; c.err='interrupted (page was closed or reloaded). Tap Retry.'; idbPut(c); } });
+  S.clips = all; renderClips();
+  if (all.some(c=>c.status==='failed')) setStatus('A saved recording was not transcribed. Tap Retry in "Saved recordings" below.','err');
+}
+async function pruneClips(){ const keep=15; if (S.clips.length>keep){ const sorted=[...S.clips].sort((a,b)=>a.ts-b.ts); const drop=sorted.slice(0,S.clips.length-keep).filter(c=>c.status==='done'); drop.forEach(c=>idbDel(c.id)); S.clips=S.clips.filter(c=>!drop.includes(c)); } }
 const SEP = '###EN###';
 
 // ---------- settings
@@ -170,22 +219,24 @@ $('save').onclick = ()=>saveSettings(false);
 $('mode').onchange = ()=>{ saveSettings(true); applyMode(); };
 function applyMode(){
   const m = $('mode').value;
-  $('enbox').style.display = (m==='both'||m==='en') ? '' : 'none';
-  $('corbox').style.display = (m==='both'||m==='ta') ? '' : 'none';
+  // all three boxes stay visible; the mode only controls what runs automatically after speaking
+  $('enbox').style.display = ''; $('corbox').style.display = '';
 }
 loadSettings(); applyMode();
 function setStatus(t,c){ const el=$('status'); el.textContent=t; el.className=c||''; }
 
 // ---------- display
 function render(){
+  S.items.sort((a,b)=>(a.ts||0)-(b.ts||0));
   $('out').value = S.items.map(i=>i.raw||'').filter(Boolean).join(' ');
   $('cor').value = S.items.map(i=>i.ta||'').filter(Boolean).join(' ');
   $('en').value  = S.items.map(i=>i.en||'').filter(Boolean).join(' ');
   for (const id of ['out','cor','en']) $(id).scrollTop = $(id).scrollHeight;
+  saveItems();
 }
 function lockBoxes(){ const ro = S.recording || S.pending>0; $('out').readOnly = ro; $('cor').readOnly = ro; $('en').readOnly = ro; }
 // manual edits replace the item list with one edited item
-function onEdit(){ S.items = [{raw:$('out').value, ta:$('cor').value, en:$('en').value}]; }
+function onEdit(){ S.items = [{id:'edit', ts:0, raw:$('out').value, ta:$('cor').value, en:$('en').value}]; saveItems(); }
 for (const id of ['out','cor','en']) $(id).addEventListener('input', onEdit);
 
 // ---------- recording (auto-chunked)
@@ -220,14 +271,14 @@ async function startRec(){
   }catch(e){ setStatus('Microphone blocked: '+e.message,'err'); return; }
   saveSettings(true);
   S.recording = true; S.t0 = Date.now(); S.lastErr = false;
-  startSegment(); lockBoxes();
+  startSegment(); lockBoxes(); wakeOn();
   $('rec').textContent = '■ Stop'; $('rec').classList.add('on');
   S.tick = setInterval(()=>{ const s=Math.floor((Date.now()-S.t0)/1000); $('timer').textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }, 500);
   setStatus('Recording… speak in Tamil','');
 }
 function stopRec(){
   S.recording = false;
-  clearTimeout(S.segTimer); clearInterval(S.tick);
+  clearTimeout(S.segTimer); clearInterval(S.tick); wakeOff();
   if (S.rec && S.rec.state==='recording') S.rec.stop();
   $('rec').textContent = '● Start Recording'; $('rec').classList.remove('on');
   setStatus('Transcribing and translating…','');
@@ -236,12 +287,22 @@ $('rec').onclick = () => S.recording ? stopRec() : startRec();
 
 // ---------- pipeline: transcribe -> auto cleanup/translate (sequential, keeps order)
 function enqueue(blob, name){
+  const clip = {id: Date.now()+'-'+Math.random().toString(36).slice(2,6), ts: Date.now(), blob, name: name||'', status:'queued', err:''};
+  S.clips.push(clip);
+  idbPut(clip);            // saved BEFORE any network call, so a failure never loses the audio
+  pruneClips();
+  runClip(clip);
+}
+function runClip(clip){
   S.pending++; lockBoxes();
+  clip.status='working'; clip.err=''; idbPut(clip); renderClips();
   S.queue = S.queue.then(async()=>{
     setStatus('Transcribing…','');
-    const raw = (await transcribe(blob,name)).trim();
-    if (!raw) return;
-    const item = {raw, ta:'', en:''};
+    const raw = (await transcribe(clip.blob, clip.name)).trim();
+    clip.status='done'; idbPut(clip); renderClips();
+    if (!raw) { setStatus('No speech detected in that recording','err'); return; }
+    S.items = S.items.filter(i=>i.id!==clip.id);
+    const item = {id:clip.id, ts:clip.ts, raw, ta:'', en:''};
     S.items.push(item); render();           // exact transcription shows first, untouched
     const mode = $('mode').value;
     if (mode==='raw') return;
@@ -250,7 +311,8 @@ function enqueue(blob, name){
     catch(e){ S.lastErr = true; setStatus('Correction/translation error: '+e.message+' (exact transcription kept)','err'); }
     render();
   }).catch(e=>{
-    S.lastErr = true; setStatus('Transcription error: '+e.message,'err');
+    clip.status='failed'; clip.err=e.message; idbPut(clip); renderClips();
+    S.lastErr = true; setStatus('Transcription failed: '+e.message+'. Your recording is saved. Tap Retry under "Saved recordings".','err');
   }).finally(()=>{
     S.pending--; lockBoxes();
     if (!S.pending && !S.recording){ if (!S.lastErr) setStatus('Done ✔','ok'); autoRephrase(); }
@@ -361,7 +423,7 @@ function parseJSON(s){
 const asText = v => Array.isArray(v) ? v.join('\n') : (v==null ? '' : String(v));
 
 async function autoRephrase(force){
-  if (force !== true && $('autorp').value !== 'on') return;
+  if (force !== true && ($('autorp').value !== 'on' || $('mode').value === 'raw')) return;   // "no AI at all" mode never auto-rephrases
   const text = $('en').value.trim() || $('cor').value.trim() || $('out').value.trim();
   if (!text) return;
   const my = ++rpToken;
@@ -394,25 +456,33 @@ async function autoRephrase(force){
 }
 // buttons for after you edit the text by hand
 $('rpnow').onclick = ()=>{ clearTimeout(rpTimer); autoRephrase(true); };
-$('retr').onclick = async ()=>{
+// on-demand buttons: work in every mode, on whatever is in the Exact transcription box
+async function runOnDemand(btnId, task){
   const raw = $('out').value.trim();
   if (!raw){ setStatus('Exact transcription box is empty','err'); return; }
-  const mode = $('mode').value;
-  const btn = $('retr'); btn.disabled = true;
+  const btn = $(btnId); btn.disabled = true;
   try{
-    if (mode === 'raw'){ S.items = [{raw, ta:'', en:''}]; }
-    else {
-      setStatus(mode==='ta' ? 'Correcting…' : 'Translating…','');
-      const item = {raw, ta:'', en:''};
-      S.items = [item];
-      await process(item, mode);
-      setStatus('Done ✔','ok');
-    }
+    const item = {id:'merged', ts:0, raw, ta:$('cor').value.trim(), en:$('en').value.trim()};
+    S.items = [item];                         // one merged item: keeps what you typed in all three boxes
+    setStatus(task==='en' ? 'Translating to English…' : 'Correcting…','');
+    await process(item, task);                // 'en' -> fills English only; 'ta' -> fills AI-corrected Tamil only
     render();
-    autoRephrase(true);
-  }catch(e){ setStatus('Error: '+e.message,'err'); }
+    setStatus('Done ✔','ok'); S.lastErr = false;
+    if (task==='en') autoRephrase(true);      // you asked for translation, so rephrase options follow even in "no AI" mode
+  }catch(e){ render(); setStatus('Error: '+e.message,'err'); }
   btn.disabled = false;
-};
+}
+$('trnow').onclick  = ()=>runOnDemand('trnow','en');
+$('cornow').onclick = ()=>runOnDemand('cornow','ta');
+$('clipdelall').onclick = ()=>{ if(confirm('Delete ALL saved recordings from this phone?')){ S.clips.forEach(c=>idbDel(c.id)); S.clips=[]; renderClips(); } };
+
+// keep the screen awake while recording (phones otherwise pause the mic)
+async function wakeOn(){ try{ if (navigator.wakeLock) S.wake = await navigator.wakeLock.request('screen'); }catch(e){} }
+function wakeOff(){ try{ if (S.wake){ S.wake.release(); S.wake=null; } }catch(e){} }
+document.addEventListener('visibilitychange', ()=>{ if (document.visibilityState==='visible' && S.recording) wakeOn(); });
+
+// restore text and saved recordings after a reload
+restoreItems(); render(); loadClips();
 // copy buttons (grammar copies only the corrected sentence, not the explanation)
 document.querySelectorAll('.cp').forEach(b=>{
   b.onclick = async ()=>{
